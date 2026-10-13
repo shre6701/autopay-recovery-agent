@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autopay Recovery</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1c1b18; --muted: #6b6860; --line: #e4e1d8;
+    --call: #1f6f4a; --call-bg: #e3f2ea; --sched: #8a5a00; --sched-bg: #fbefd6;
+    --retry: #2d5a8a; --retry-bg: #e2ecf7; --human: #7a3e9d; --human-bg: #f0e6f6;
+    --skip: #6b6860; --skip-bg: #eeece6; --good: #1f6f4a; --bad: #a33a2b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151513; --panel: #1e1e1b; --ink: #ecebe6; --muted: #9c998f; --line: #33322e;
+      --call: #6fd3a0; --call-bg: #1d3328; --sched: #f0c06a; --sched-bg: #3a2f17;
+      --retry: #8fb8e6; --retry-bg: #1c2a3a; --human: #cfa3e8; --human-bg: #2f2238;
+      --skip: #9c998f; --skip-bg: #2a2a26; --good: #6fd3a0; --bad: #f08a7a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 20px 16px 8px; max-width: 1200px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; justify-content: space-between; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; }
+  main { max-width: 1200px; margin: 0 auto; padding: 8px 16px 40px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 12px 0 20px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .kpi .l { color: var(--muted); font-size: 12px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
+  section h2 { font-size: 14px; margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 880px; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 550; font-size: 12px; }
+  tr:last-child td { border-bottom: 0; }
+  .num { font-variant-numeric: tabular-nums; text-align: right; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .call { color: var(--call); background: var(--call-bg); }
+  .schedule { color: var(--sched); background: var(--sched-bg); }
+  .silent_retry { color: var(--retry); background: var(--retry-bg); }
+  .human_handoff { color: var(--human); background: var(--human-bg); }
+  .skip, .wait { color: var(--skip); background: var(--skip-bg); }
+  .status-recovered { color: var(--good); font-weight: 600; }
+  .status-cancelled, .status-handed_off { color: var(--human); }
+  .why { color: var(--muted); font-size: 12px; margin-top: 2px; max-width: 320px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  a { color: inherit; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
+  .empty { padding: 14px; color: var(--muted); }
+  .ok { color: var(--good); } .err { color: var(--bad); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  .transcript { max-height: 220px; overflow: auto; font-size: 12px; margin-top: 6px; }
+  .transcript b { font-weight: 600; }
+  .cfg span { margin-right: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Autopay recovery: <span id="merchant">loading</span></h1>
+    <div class="sub">Failed payments, what the engine decided, and what happened on the calls. Updates every 5 seconds.</div>
+  </div>
+  <div class="sub cfg" id="cfg"></div>
+</header>
+<main>
+  <div class="kpis" id="kpis"></div>
+
+  <section>
+    <h2>Customers and decisions</h2>
+    <div class="scroll"><table>
+      <thead><tr>
+        <th>Customer</th><th>Failure</th><th class="num">Due</th><th>Decision</th><th>Status</th>
+        <th>Latest outcome</th><th>Payment link</th><th>Calls</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </section>
+
+  <div class="grid2">
+    <section>
+      <h2>Tool calls from the agent</h2>
+      <div class="scroll" id="tools"></div>
+    </section>
+    <section>
+      <h2>Passed to the merchant team</h2>
+      <div id="esc"></div>
+    </section>
+  </div>
+</main>
+<script>
+const inr = n => n == null ? "-" : "₹" + Number(n).toLocaleString("en-IN");
+const pct = n => n == null ? "-" : Math.round(n * 100) + "%";
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const label = s => String(s || "").replaceAll("_", " ");
+const nowParam = new URLSearchParams(location.search).get("now");
+
+async function load() {
+  let data;
+  try {
+    const r = await fetch("/api/state" + (nowParam ? "?now=" + encodeURIComponent(nowParam) : ""));
+    data = await r.json();
+  } catch (e) { return; }
+  const m = data.metrics;
+  document.getElementById("merchant").textContent = data.merchant.name + (data.merchant.fictional ? " (fictional)" : "");
+  const c = data.config;
+  document.getElementById("cfg").innerHTML =
+    `<span>Razorpay: <b>${esc(c.razorpay_mode)}</b></span><span>Sarvam: <b>${c.sarvam_ready ? "ready" : "not configured"}</b></span>` +
+    `<span>Calling window: ${esc(c.call_window)}</span><span>As of ${esc(data.now.slice(0,16).replace("T"," "))}</span>`;
+
+  const kpis = [
+    ["Recovered", inr(m.recovered_inr)],
+    ["Recovery rate (of called)", pct(m.recovery_rate)],
+    ["Promised / retry booked", inr(m.promised_inr)],
+    ["Calls connected", `${m.calls_connected} / ${m.calls_placed}`],
+    ["Call cost", inr(m.call_cost_inr)],
+    ["Cost per ₹100 recovered", m.cost_per_100_inr_recovered == null ? "-" : "₹" + m.cost_per_100_inr_recovered],
+    ["Not called (rules or human)", m.skipped_or_human],
+  ];
+  document.getElementById("kpis").innerHTML = kpis.map(([l, v]) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+
+  document.getElementById("rows").innerHTML = data.customers.map(r => {
+    const d = r.decision;
+    const decision = d ? `<span class="pill ${d.action}">${label(d.action)}</span><div class="why">${esc(d.reason)}${d.next_contact_at ? " Next: " + esc(d.next_contact_at.slice(0,16).replace("T"," ")) : ""}</div>` : `<span class="why">closed</span>`;
+    const o = r.last_outcome;
+    const outcome = o ? `${label(o.outcome)}${o.promise_date ? ", " + esc(o.promise_date) : ""}<div class="why">via ${esc(o.source)}</div>` : "-";
+    const link = r.link ? `<a href="${esc(r.link.short_url)}" target="_blank" rel="noopener">${esc(r.link.status)}</a><div class="why">${esc(r.link.mode)}</div>` : "-";
+    const calls = r.calls.length ? r.calls.map(a => {
+      let t = [];
+      try { t = JSON.parse(a.transcript || "[]"); } catch (e) {}
+      const tx = t.length ? `<details><summary>transcript</summary><div class="transcript">${t.map(x => `<div><b>${esc(x.role)}:</b> ${esc(x.en_text)}</div>`).join("")}</div></details>` : "";
+      return `<div>${esc(a.status)}${a.duration_s ? ", " + Math.round(a.duration_s) + "s" : ""}${a.simulated ? ", sim" : ""}</div>${tx}`;
+    }).join("") : "-";
+    return `<tr>
+      <td><b>${esc(r.name)}</b><div class="why">${esc(r.customer_id)} | ${esc(r.preferred_language)} | ${esc(label(r.mandate_type))}</div></td>
+      <td>${esc(label(r.failure_reason))}</td>
+      <td class="num">${inr(r.amount_due_inr)}</td>
+      <td>${decision}</td>
+      <td class="status-${esc(r.status)}">${esc(label(r.status))}</td>
+      <td>${outcome}</td><td>${link}</td><td>${calls}</td></tr>`;
+  }).join("");
+
+  document.getElementById("tools").innerHTML = data.tool_log.length ? `<table style="min-width:520px"><thead><tr><th>Time (UTC)</th><th>Tool</th><th>Customer</th><th>Result</th></tr></thead><tbody>` +
+    data.tool_log.map(t => {
+      let msg = ""; try { msg = JSON.parse(t.response).message || ""; } catch (e) {}
+      return `<tr><td class="mono">${esc(t.created_at.slice(11,19))}</td><td class="mono">${esc(t.tool)}</td><td>${esc(t.customer_id)}</td><td class="${t.ok ? "ok" : "err"}">${esc(msg)}</td></tr>`;
+    }).join("") + `</tbody></table>` : `<div class="empty">No tool calls yet.</div>`;
+
+  document.getElementById("esc").innerHTML = data.escalations.length ? `<table style="min-width:0"><tbody>` +
+    data.escalations.map(e => `<tr><td>${esc(e.customer_id)}</td><td>${esc(e.reason)}</td></tr>`).join("") + `</tbody></table>` :
+    `<div class="empty">Nothing handed over yet.</div>`;
+}
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>
