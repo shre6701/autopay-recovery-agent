@@ -192,4 +192,5 @@ def agent_variables(customer: Customer, decision: Decision, merchant_name: str, 
         "latest_retry_date": decision.grace_end,
         "suggested_retry_date": retry_hint.isoformat() if retry_hint else "",
         "preferred_language": customer.preferred_language,
+        "today_date": today.isoformat(),
     }
